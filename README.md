@@ -109,7 +109,10 @@ python launch.py
 ├── launch.py                     # Entry point & dependency validator
 ├── requirements.txt              # Production dependency list
 ├── AV_Snap.spec                  # PyInstaller build spec
+├── EXCLUSIONS.md                 # Specification of excluded data & local rebuild guide
 ├── README.md                     # Project documentation
+├── ads/                          # Product marketing & video splash screen assets
+├── logos/                        # Application icons and branding assets
 ├── src/
 │   ├── alignment_engine.py       # Core registration math (RANSAC, GICP, Centroid)
 │   ├── io_manager.py             # BIM & scan I/O with unit-aware placement baking
