@@ -1,38 +1,52 @@
-import sys
-import subprocess
+"""Offline launcher: dependency installation belongs to setup, never startup."""
 import os
+import sys
 
-def check_and_install_dependencies():
-    req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
-    if not os.path.exists(req_file):
-        print("requirements.txt not found. Skipping dependency check.")
-        return
 
-    print("Checking dependencies...")
-    
-    # Simplified dependency installation: install all packages from requirements.txt
-    print("Installing dependencies from requirements.txt...")
+def main():
+    if len(sys.argv)>1 and sys.argv[1]=='--e57-worker':
+        from src.e57_worker import main as run
+        run(sys.argv[2:]); return 0
+    if len(sys.argv)>1 and sys.argv[1]=='--desktop-worker':
+        from src.desktop_worker import main as run
+        run(sys.argv[2:]); return 0
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
-        print("Dependencies installed successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to install dependencies: {e}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    check_and_install_dependencies()
-    
-    # Once dependencies are confirmed, launch the main application
-    print("Launching 3D Alignment Tool...")
-    
-    # Add src to Python path so it can import local modules
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
-    
-    try:
-        from src.main_gui import main
-        main()
-    except Exception as e:
-        print(f"Error launching application: {e}")
+        from PyQt5.QtCore import Qt,QTimer
+        from PyQt5.QtWidgets import QApplication,QMessageBox
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling,True)
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,True)
+        app=QApplication(sys.argv)
+        app.setApplicationName('AV Snap'); app.setOrganizationName('Artificial Vision')
+        from src.theme import BrandSplash
+        splash=BrandSplash(); splash.show(); splash.status('Loading geometry engine…'); app.processEvents()
+        from src.main_gui import MainWindow
+        splash.status('Preparing alignment studio…'); app.processEvents()
+        window=MainWindow(); window.show(); splash.finish(window)
+        if '--smoke-test' in sys.argv:
+            def verify():
+                try:
+                    assert window.windowTitle().startswith('AV Snap')
+                    assert not window.btn_export.isEnabled()
+                    assert not window.btn_approve.isEnabled()
+                    window.grab().save(os.environ.get('AV_SNAP_SCREENSHOT','/tmp/av-snap-smoke.png'))
+                    print('PASS packaged/startup GUI smoke',flush=True)
+                    app.exit(0)
+                except Exception:
+                    import traceback
+                    traceback.print_exc(); app.exit(1)
+            QTimer.singleShot(300,verify)
+        return app.exec_()
+    except Exception as error:
         import traceback
         traceback.print_exc()
-        input("Press Enter to exit...")
+        message=f'AV Snap could not start: {error}\nInstall requirements.txt in your virtual environment, then retry. No packages are installed during launch.'
+        try:
+            from PyQt5.QtWidgets import QApplication,QMessageBox
+            app=QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(None,'AV Snap startup error',message)
+        except Exception:
+            print(message,file=sys.stderr)
+        return 1
+
+if __name__=='__main__':
+    sys.exit(main())

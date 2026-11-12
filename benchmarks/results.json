@@ -1,0 +1,50 @@
+{
+  "dataset": "Synthetic uniform 3 \u00d7 2 \u00d7 1 m volume, seed 42, 3000 points. Not a real-building quality benchmark.",
+  "threads": 2,
+  "runs": [
+    {
+      "version": "current",
+      "case": "translation",
+      "points": 3000,
+      "seconds": 2.115680556999905,
+      "peak_sampled_rss_mb": 238.19921875,
+      "mean_distance_m": 4.621828664773487e-17,
+      "rotation_error_degrees": 0.0,
+      "translation_error_m": 6.359601310784502e-17,
+      "status": "Validated"
+    },
+    {
+      "version": "current",
+      "case": "tilted_rigid",
+      "points": 3000,
+      "seconds": 1.771410724999896,
+      "peak_sampled_rss_mb": 237.265625,
+      "mean_distance_m": 2.5617067095443517e-06,
+      "rotation_error_degrees": 0.0001005714914676858,
+      "translation_error_m": 4.970934300832252e-06,
+      "status": "Validated"
+    },
+    {
+      "version": "baseline",
+      "case": "translation",
+      "points": 3000,
+      "seconds": 1.3532524019999528,
+      "peak_sampled_rss_mb": 449.96875,
+      "mean_distance_m": 5.4358137624803496e-17,
+      "rotation_error_degrees": 0.0,
+      "translation_error_m": 7.97218214573518e-17,
+      "status": "not independently validated"
+    },
+    {
+      "version": "baseline",
+      "case": "tilted_rigid",
+      "points": 3000,
+      "seconds": 1.8876990650001062,
+      "peak_sampled_rss_mb": 449.40625,
+      "mean_distance_m": 0.00023447031270361324,
+      "rotation_error_degrees": 0.022142180581838092,
+      "translation_error_m": 0.0004503490809772032,
+      "status": "not independently validated"
+    }
+  ]
+}

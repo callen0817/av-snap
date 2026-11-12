@@ -1,60 +1,19 @@
-# -*- mode: python ; coding: utf-8 -*-
+# Build on the target OS: python -m PyInstaller --noconfirm AV_Snap.spec
 import os
-import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-block_cipher = None
+datas=[('logos','logos')]
+binaries=[]
+hiddenimports=collect_submodules('src')
+for package in ['open3d','ifcopenshell','pye57','pyqtgraph','OpenGL']:
+    data, binary, hidden = collect_all(package, filter_submodules=lambda name: not any(part in name.split(".") for part in ["examples", "tests", "ml"]))
+    datas += data
+    binaries += binary
+    hiddenimports += hidden
 
-# Collect all submodules and data for complex packages
-hidden_imports = collect_submodules('src')
-hidden_imports += ['PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets', 'open3d', 'pythonnet', 'laspy', 'pyproj', 'numpy', 'scipy', 'ifcopenshell', 'pye57']
-
-# Add src directory to path
-sys.path.insert(0, os.path.abspath('src'))
-
-a = Analysis(
-    ['launch.py'],
-    pathex=[os.getcwd()],
-    binaries=[],
-    datas=[('src', 'src')],
-    hiddenimports=hidden_imports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='AV_Snap',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='AV_Snap',
-)
+a=Analysis(['launch.py'],pathex=['.'],binaries=binaries,datas=datas,hiddenimports=hiddenimports,
+    excludes=['torch','tensorflow','tensorboard','bpy','PySide6','PyQt6','pytest','IPython','jupyterlab','notebook'],noarchive=False)
+pyz=PYZ(a.pure)
+exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='AV_Snap',debug=False,icon='logos/av_snap-01.png',
+    bootloader_ignore_signals=False,strip=False,upx=False,console=True,disable_windowed_traceback=False)
+coll=COLLECT(exe,a.binaries,a.datas,strip=False,upx=False,name='AV_Snap')

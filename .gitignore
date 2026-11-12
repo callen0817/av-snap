@@ -55,3 +55,7 @@ Thumbs.db
 Desktop.ini
 _AI/
 
+
+# Private generated projects and processing outputs
+*.avsnap
+*.alignment.json
