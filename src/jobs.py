@@ -56,24 +56,44 @@ class AlignmentJob(QThread):
                     source,target,output,report_path=[str(Path(d)/name) for name in ['source.ply','target.ply','matrix.npy','report.json']]
                     o3d.io.write_point_cloud(source,moving); o3d.io.write_point_cloud(target,anchor)
                     command=[sys.executable,'--desktop-worker'] if getattr(sys,'frozen',False) else [sys.executable,'-m','src.desktop_worker']
-                    process=subprocess.Popen(command+[source,target,output,report_path],cwd=Path(__file__).resolve().parent.parent)
+                    process=subprocess.Popen(
+                        command+[source,target,output,report_path,self.preset,str(int(bool(self.upright)))],
+                        cwd=Path(__file__).resolve().parent.parent,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    stderr_output=''
                     try:
                         while True:
                             self.checkpoint()
-                            try: code=process.wait(timeout=.2); break
-                            except subprocess.TimeoutExpired: pass
-                        if code: raise RuntimeError('Manual point picking failed. Check the desktop display and selected correspondences.')
+                            try:
+                                _,stderr_output=process.communicate(timeout=.2)
+                                break
+                            except subprocess.TimeoutExpired:
+                                pass
+                        if process.returncode:
+                            detail=stderr_output.strip()[-1000:]
+                            msg='Manual point picking failed. Check the desktop display and selected correspondences.'
+                            if detail:
+                                msg=f'{msg}\n{detail}'
+                            raise RuntimeError(msg)
                         matrix=np.load(output,allow_pickle=False)
-                        report=json.loads(Path(report_path).read_text())
+                        report=json.loads(Path(report_path).read_text(encoding='utf-8'))
                     finally:
-                        if process.poll() is None: process.terminate(); process.wait(timeout=10)
+                        if process.poll() is None:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
             else:
                 _,matrix=engine.execute_alignment(moving,anchor)
                 report=engine.last_report.to_dict()
             self.checkpoint()
             if fingerprints!={'anchor':fingerprint(self.project.anchor),'moving':fingerprint(self.project.moving)}:
                 raise ValueError('Source files changed during processing. Reload and retry.')
-            self.completed.emit({'anchor':anchor,'moving':moving,'matrix':matrix,'report':report,'fingerprints':fingerprints})
+            self.completed.emit({'anchor':anchor,'moving':moving,'matrix':matrix,'report':report,'fingerprints':fingerprints,'operation':self.operation})
         except Exception as error:
             self.error.emit(str(error))
         finally:
@@ -87,23 +107,48 @@ class ExportJob(QThread):
     def __init__(self,project,io,cloud,destination,parent=None):
         super().__init__(parent)
         self.project=copy.deepcopy(project); self.io=io; self.cloud=cloud; self.destination=destination
+        self.stop=threading.Event()
+
+    def cancel(self):
+        self.stop.set()
+
+    def checkpoint(self):
+        if self.stop.is_set():
+            raise InterruptedError('Export cancelled.')
 
     def run(self):
         try:
+            self.io.cancelled=self.stop.is_set
+            self.checkpoint()
             self.project.require_export()
             # Never relabel a reprojected cloud with the source CRS. Reprojection
             # is a separate explicit operation, outside rigid registration.
             if Path(self.project.moving).suffix.lower() in {'.las','.laz'} and Path(self.project.anchor).suffix.lower() in {'.las','.laz'}:
                 import laspy
                 with laspy.open(self.project.moving) as a, laspy.open(self.project.anchor) as b:
-                    source_crs,anchor_crs=a.header.parse_crs(),b.header.parse_crs()
+                    try:
+                        source_crs,anchor_crs=a.header.parse_crs(),b.header.parse_crs()
+                    except Exception:
+                        source_crs,anchor_crs=None,None
                     if source_crs is not None and anchor_crs is not None and source_crs!=anchor_crs:
                         raise ValueError('LAS coordinate reference systems differ. Reproject a copy into the anchor CRS before native export.')
-            aligned=copy.deepcopy(self.cloud).transform(self.project.matrix)
-            validation=self.io.export_dataset(aligned,self.destination,self.project.moving,self.project.matrix)
-            self.project.verify_sources()
+            self.checkpoint()
+            ext=Path(self.destination).suffix.lower()
+            if ext in {'.ifc','.e57','.las','.laz'}:
+                aligned=self.cloud
+            else:
+                aligned=copy.deepcopy(self.cloud).transform(self.project.matrix)
+            validation=self.io.export_dataset(
+                aligned,
+                self.destination,
+                self.project.moving,
+                self.project.matrix,
+                before_commit=self.project.verify_sources,
+            )
             report=self.project.to_dict(); report['export_validation']=validation; report['export_file']=str(Path(self.destination).resolve())
             atomic_json(self.destination+'.alignment.json',report)
             self.completed.emit(self.destination)
         except Exception as error:
             self.error.emit(str(error))
+        finally:
+            self.io.cancelled=lambda: False

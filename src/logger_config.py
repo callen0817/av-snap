@@ -15,7 +15,7 @@ def create_logger():
     for folder in [base,Path(tempfile.gettempdir())/'av-snap-logs']:
         try:
             folder.mkdir(parents=True,exist_ok=True)
-            handler=logging.FileHandler(folder/f'alignment_{datetime.now():%Y%m%d_%H%M%S}.log',encoding='utf-8')
+            handler=logging.FileHandler(folder/f'alignment_{datetime.now():%Y%m%d_%H%M%S}.log',encoding='utf-8',delay=True)
             handler.setFormatter(formatter); logger.addHandler(handler)
             break
         except OSError:
@@ -23,7 +23,9 @@ def create_logger():
     return logger
 
 
-log=create_logger()
+def get_logger():
+    return create_logger()
+
 
 def log_milestone(phase,name,status):
-    log.info('[%s] %s: %s',phase,name,status)
+    get_logger().info('[%s] %s: %s',phase,name,status)

@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 datas=[('logos','logos')]
 binaries=[]
 hiddenimports=collect_submodules('src')
-for package in ['open3d','ifcopenshell','pye57','pyqtgraph','OpenGL']:
+for package in ['open3d','ifcopenshell','pye57','pyqtgraph','OpenGL','laspy','lazrs','pyproj']:
     data, binary, hidden = collect_all(package, filter_submodules=lambda name: not any(part in name.split(".") for part in ["examples", "tests", "ml"]))
     datas += data
     binaries += binary

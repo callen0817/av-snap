@@ -33,13 +33,14 @@ class AlignmentEngine:
             raise ValueError('Alignment needs at least 30 finite points per dataset.')
         if max(cloud.get_axis_aligned_bounding_box().get_extent()) <= 1e-8:
             raise ValueError('Dataset has no spatial extent.')
-        prepared = IOManager().preprocess_point_cloud(cloud, voxel, noise_filter=True)
+        prepared = IOManager.preprocess_point_cloud(cloud, voxel, noise_filter=True)
         self._prepared_cache[key] = (cloud, prepared)
         return prepared
 
     def _refine(self, source, target, initial, voxel):
         matrix = rigid_matrix(initial)
         iterations = self.PRESETS[self.preset][1]
+        centroid = np.asarray(source.get_center(), dtype=float)
         for level in [4,2,1]:
             self._checkpoint(f'Refining at {voxel*level:.3f} m resolution')
             a, b = self._prepare(source,voxel*level), self._prepare(target,voxel*level)
@@ -50,7 +51,11 @@ class AlignmentEngine:
             matrix = rigid_matrix(result.transformation)
             if self.upright:
                 yaw = np.arctan2(matrix[1,0],matrix[0,0])
-                matrix[:3,:3] = o3d.geometry.get_rotation_matrix_from_xyz([0,0,yaw])
+                r_old = matrix[:3,:3].copy()
+                t_old = matrix[:3,3].copy()
+                r_yaw = o3d.geometry.get_rotation_matrix_from_xyz([0,0,yaw])
+                matrix[:3,:3] = r_yaw
+                matrix[:3,3] = r_old @ centroid + t_old - r_yaw @ centroid
         return matrix
 
     def execute_alignment(self, source, target):
@@ -120,9 +125,15 @@ class AlignmentEngine:
 
     def refine_initial(self, source, target, initial):
         self._prepared_cache.clear()
+        if self.preset not in self.PRESETS:
+            raise ValueError('Unknown processing preset.')
         voxel = max(.02,max(source.get_axis_aligned_bounding_box().get_extent())/150)
-        matrix = self._refine(source,target,initial,voxel)
-        self.last_report = validate_alignment(source,target,matrix,voxel*2.5)
+        a, b = self._prepare(source, voxel), self._prepare(target, voxel)
+        while max(len(a.points), len(b.points)) > self.PRESETS[self.preset][0]:
+            voxel *= 1.5
+            a, b = self._prepare(source, voxel), self._prepare(target, voxel)
+        matrix = self._refine(a, b, initial, voxel)
+        self.last_report = validate_alignment(a, b, matrix, voxel*2.5)
         if self.last_report.status == 'Validated':
             self.last_report.status = 'Needs Review'
             self.last_report.issues.append('User initialization refined; independent alternative candidates were not compared.')

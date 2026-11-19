@@ -9,7 +9,9 @@ from src.alignment_engine import AlignmentEngine
 def main(args=None):
     args=sys.argv[1:] if args is None else args
     source=o3d.io.read_point_cloud(args[0]); target=o3d.io.read_point_cloud(args[1])
-    engine=AlignmentEngine()
+    preset=args[4] if len(args)>4 else 'Balanced'
+    upright=bool(int(args[5])) if len(args)>5 else False
+    engine=AlignmentEngine(preset=preset,upright=upright)
     _,matrix=engine.execute_manual_alignment(source,target)
     np.save(args[2],matrix)
     with open(args[3],'w',encoding='utf-8') as stream:

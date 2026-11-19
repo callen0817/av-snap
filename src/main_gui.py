@@ -1,25 +1,36 @@
 """AV Snap desktop studio: Import → Align → Review → Approve → Export."""
-import copy
-import json
-import os
+import re
 import sys
 from pathlib import Path
 import numpy as np
-from PyQt5.QtCore import Qt,QTimer
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QFrame,
     QLabel,QPushButton,QFileDialog,QMessageBox,QTextEdit,QSplitter,QComboBox,QCheckBox,
-    QProgressBar,QDoubleSpinBox,QFormLayout,QGridLayout,QScrollArea,QInputDialog,QDialog,QTableWidget,
+    QProgressBar,QDoubleSpinBox,QGridLayout,QScrollArea,QInputDialog,QDialog,QTableWidget,
     QTableWidgetItem,QDialogButtonBox,QShortcut,QSizePolicy)
 from src.io_manager import IOManager
 from src.project import AlignmentProject
 from src.jobs import AlignmentJob,ExportJob
 from src.quality import validate_alignment
-from src.transforms import from_correspondences
+from src.transforms import from_correspondences,rigid_matrix
 from src.theme import STYLE,icon
 from src.viewport import CloudViewport
 
 FORMATS='3D datasets (*.e57 *.las *.laz *.ply *.pcd *.pts *.xyz *.ifc);;All files (*)'
+
+
+def _append_filter_extension(path, selected_filter, fallback_ext=''):
+    if not path or Path(path).suffix:
+        return path
+    match=re.search(r'\*(\.[A-Za-z0-9]+)', selected_filter or '')
+    ext=match.group(1) if match else fallback_ext
+    return f'{path}{ext}' if ext else path
+
+
+def _truncate_status(message, limit=120):
+    line=str(message).strip().splitlines()[0] if str(message).strip() else ''
+    return line if len(line)<=limit else line[:limit-1]+'…'
 
 
 def label(text,role=None):
@@ -42,8 +53,8 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon()); self.resize(1440,900); self.setMinimumSize(1040,680)
         self.setStyleSheet(STYLE)
         self.project=AlignmentProject(); self.io=IOManager(); self.worker=None; self.export_worker=None
-        self.anchor_pcd=None; self.moving_pcd=None; self.aligned_pcd=None; self._busy=False; self._closing=False
-        self.dataset_buttons=[]; self.action_buttons=[]
+        self.anchor_pcd=None; self.moving_pcd=None; self._busy=False; self._closing=False
+        self.dataset_buttons=[]
         self.init_ui()
         self.check_run_ready()
         self.log_message('AV Snap ready. Source datasets are preserved; every new transform requires approval.')
@@ -151,7 +162,11 @@ class MainWindow(QMainWindow):
         self._busy=busy
         self.progress.setRange(0,0) if busy else self.progress.setRange(0,1)
         self.progress.setValue(0 if busy else 1)
-        self.cancel_button.setEnabled(busy and isinstance(self.worker,AlignmentJob) and self.worker.isRunning())
+        cancellable=(
+            (isinstance(self.worker,AlignmentJob) and self.worker.isRunning())
+            or (isinstance(self.export_worker,ExportJob) and self.export_worker.isRunning())
+        )
+        self.cancel_button.setEnabled(busy and cancellable)
         self.check_run_ready()
 
     def check_run_ready(self,*args):
@@ -176,8 +191,9 @@ class MainWindow(QMainWindow):
         if kind=='anchor': anchor=path
         else: moving=path
         self.project=AlignmentProject(anchor=anchor,moving=moving)
-        self.anchor_pcd=self.moving_pcd=self.aligned_pcd=None
+        self.anchor_pcd=self.moving_pcd=None
         self.viewport.anchor=self.viewport.moving=None
+        self.viewport.clear_caches()
         if self.viewport.gl:
             for item in self.viewport.items: self.viewport.gl.removeItem(item)
             self.viewport.items=[]
@@ -210,9 +226,15 @@ class MainWindow(QMainWindow):
     def run_manual_alignment(self): self._start('manual')
 
     def handle_finished(self,result):
+        initial_load=(self.moving_pcd is None or result.get('operation')=='restore')
         self.anchor_pcd,self.moving_pcd=result['anchor'],result['moving']
         self.project.fingerprints=result['fingerprints']
-        self.project.set_transform(result['matrix'],result['report'])
+        if initial_load:
+            self.project.matrix=rigid_matrix(result['matrix'])
+            self.project.report=result['report']
+            self.project.revoke()
+        else:
+            self.project.set_transform(result['matrix'],result['report'])
         self.candidates.blockSignals(True); self.candidates.clear(); self.candidates.addItem('Candidate comparison')
         for candidate in result['report'].get('candidates',[]): self.candidates.addItem(f"{candidate['name']} · {candidate['score']:.2f}",candidate)
         self.candidates.blockSignals(False)
@@ -221,7 +243,7 @@ class MainWindow(QMainWindow):
 
     def handle_error(self,message):
         self.project.revoke(); self.log_message(f'ERROR: {message}')
-        self.status_label.setText(str(message)); self.check_run_ready()
+        self.status_label.setText(_truncate_status(message)); self.check_run_ready()
         if 'cancel' not in str(message).lower() and not self._closing:
             QMessageBox.critical(self,'Processing error',str(message))
 
@@ -230,8 +252,13 @@ class MainWindow(QMainWindow):
         if self._closing: self.close()
 
     def cancel(self):
+        cancelled=False
         if self.worker and self.worker.isRunning():
-            self.worker.cancel(); self.cancel_button.setEnabled(False)
+            self.worker.cancel(); cancelled=True
+        if self.export_worker and self.export_worker.isRunning():
+            self.export_worker.cancel(); cancelled=True
+        if cancelled:
+            self.cancel_button.setEnabled(False)
             self.log_message('Cancellation requested. Waiting for the current bounded native operation to finish.')
 
     def refresh_review(self,revalidate=False):
@@ -291,6 +318,7 @@ class MainWindow(QMainWindow):
         if self._busy: return
         self.project=AlignmentProject(); self.anchor_pcd=self.moving_pcd=None; self.io.clear_cache()
         self.viewport.anchor=self.viewport.moving=None
+        self.viewport.clear_caches()
         if self.viewport.gl:
             for item in self.viewport.items: self.viewport.gl.removeItem(item)
             self.viewport.items=[]
@@ -300,7 +328,8 @@ class MainWindow(QMainWindow):
 
     def save_project(self):
         if self._busy: return
-        path,_=QFileDialog.getSaveFileName(self,'Save alignment project','','AV Snap project (*.avsnap)')
+        path,selected=QFileDialog.getSaveFileName(self,'Save alignment project','','AV Snap project (*.avsnap)')
+        path=_append_filter_extension(path,selected,'.avsnap')
         if path:
             try: self.project.save(path); self.log_message(f'Project saved: {path}')
             except Exception as error: self.handle_error(str(error))
@@ -320,15 +349,23 @@ class MainWindow(QMainWindow):
         try: self.project.require_export()
         except Exception as error: QMessageBox.warning(self,'Export blocked',str(error)); return
         ext=Path(self.moving_file).suffix.lower()
-        default=str(Path(self.moving_file).with_name(Path(self.moving_file).stem+'_aligned'+(ext if ext in {'.ifc','.e57','.las','.laz'} else '.ply')))
+        default_ext=ext if ext in {'.ifc','.e57','.las','.laz'} else '.ply'
+        default=str(Path(self.moving_file).with_name(Path(self.moving_file).stem+'_aligned'+default_ext))
         formats={'ifc':'IFC (*.ifc)','e57':'E57 (*.e57)','las':'LAS (*.las)','laz':'LAZ (*.laz)'}
-        native=formats.get(ext[1:],'PLY (*.ply)')
-        path,_=QFileDialog.getSaveFileName(self,'Export approved result',default,native+';;PLY (*.ply);;PCD (*.pcd);;XYZ (*.xyz)')
+        filter_list=[]
+        native=formats.get(ext[1:])
+        if native:
+            filter_list.append(native)
+        for item in ['PLY (*.ply)','PCD (*.pcd)','XYZ (*.xyz)']:
+            if item not in filter_list:
+                filter_list.append(item)
+        path,selected=QFileDialog.getSaveFileName(self,'Export approved result',default,';;'.join(filter_list))
+        path=_append_filter_extension(path,selected,default_ext)
         if not path: return
         self.export_worker=ExportJob(self.project,self.io,self.moving_pcd,path,self)
         self.export_worker.completed.connect(lambda output:self.log_message(f'Export validated: {output} · alignment report saved alongside.'))
         self.export_worker.error.connect(self.handle_error); self.export_worker.finished.connect(self.job_stopped)
-        self._set_busy(True); self.export_worker.start()
+        self._set_busy(True); self.export_worker.start(); self.cancel_button.setEnabled(True)
 
     def _coordinate_table(self,title,rows,headers):
         dialog=QDialog(self); dialog.setWindowTitle(title); dialog.resize(760,360)

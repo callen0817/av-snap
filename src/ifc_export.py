@@ -1,4 +1,5 @@
 """Atomic IFC engineering-coordinate export, preserving the placement graph."""
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -22,7 +23,7 @@ def _products(model):
     return result
 
 
-def export_ifc(source, destination, transform):
+def export_ifc(source, destination, transform, before_commit=None):
     transform = rigid_matrix(transform)
     if Path(source).resolve() == Path(destination).resolve() or (os.path.exists(destination) and os.path.samefile(source, destination)):
         raise ValueError('Choose a new IFC filename; the source model must be preserved.')
@@ -47,7 +48,10 @@ def export_ifc(source, destination, transform):
     # placements remain intact, so the world transform is applied exactly once.
     local_transform = transform.copy()
     local_transform[:3, 3] /= scale
-    original_entities = {e.id(): e.to_string() for e in model if e.id() not in roots}
+    original_entity_hashes = {
+        e.id(): hashlib.sha256(e.to_string().encode('utf-8')).digest()
+        for e in model if e.id() not in roots
+    }
     for root in roots.values():
         new = local_transform @ get_local_placement(root)
         origin = model.create_entity('IfcCartesianPoint', tuple(map(float, new[:3, 3])))
@@ -55,6 +59,7 @@ def export_ifc(source, destination, transform):
         ref = model.create_entity('IfcDirection', tuple(map(float, new[:3, 0])))
         root.RelativePlacement = model.create_entity('IfcAxis2Placement3D', origin, axis, ref)
     folder = Path(destination).resolve().parent
+    folder.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.av-snap-', suffix='.ifc', dir=folder)
     os.close(fd)
     try:
@@ -65,11 +70,14 @@ def export_ifc(source, destination, transform):
             raise RuntimeError('IFC validation failed: product inventory changed.')
         for product_id, matrix in before.items():
             expected = local_transform @ matrix
-            if not np.allclose(after[product_id], expected, atol=1e-6 / scale, rtol=0):
+            if (not np.allclose(after[product_id][:3, :3], expected[:3, :3], atol=1e-6, rtol=0)
+                    or not np.allclose(after[product_id][:3, 3], expected[:3, 3], atol=1e-6 / scale, rtol=0)):
                 raise RuntimeError(f'IFC validation failed for product #{product_id}.')
-        for entity_id, serialized in original_entities.items():
-            if check.by_id(entity_id).to_string() != serialized:
+        for entity_id, expected_digest in original_entity_hashes.items():
+            if hashlib.sha256(check.by_id(entity_id).to_string().encode('utf-8')).digest() != expected_digest:
                 raise RuntimeError(f'IFC metadata/geometry changed for entity #{entity_id}.')
+        if before_commit is not None:
+            before_commit()
         os.replace(temporary, destination)
     finally:
         if os.path.exists(temporary):

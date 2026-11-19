@@ -53,7 +53,15 @@ class AlignmentProject:
 
     def verify_sources(self):
         for key,path in [('anchor',self.anchor),('moving',self.moving)]:
-            if key not in self.fingerprints or fingerprint(path)!=self.fingerprints[key]:
+            if not path or key not in self.fingerprints:
+                self.revoke()
+                raise ValueError('Source files changed or were not fingerprinted; reload and realign before export.')
+            try:
+                current=fingerprint(path)
+            except OSError as error:
+                self.revoke()
+                raise ValueError(f'Source file {key} is missing or unreadable: {error}') from error
+            if current!=self.fingerprints[key]:
                 self.revoke()
                 raise ValueError('Source files changed or were not fingerprinted; reload and realign before export.')
 
@@ -78,13 +86,22 @@ class AlignmentProject:
                 'fingerprints':self.fingerprints,'coordinate_frame':'local engineering coordinates','translation_units':'metres'}
 
     def save(self,path):
+        Path(path).resolve().parent.mkdir(parents=True,exist_ok=True)
         atomic_json(path,self.to_dict())
 
     @classmethod
     def load(cls,path):
         data=json.loads(Path(path).read_text(encoding='utf-8'))
-        if data.get('schema_version')!=1: raise ValueError('Unsupported project version.')
-        project=cls(anchor=data['anchor'],moving=data['moving'],matrix=rigid_matrix(data['matrix']),fingerprints=data.get('fingerprints',{}))
+        if not isinstance(data,dict) or data.get('schema_version')!=1: raise ValueError('Unsupported project version.')
+        for required in ('anchor','moving','matrix'):
+            if required not in data:
+                raise ValueError(f'Invalid project file: missing {required!r}.')
+        if not isinstance(data['anchor'],str) or not isinstance(data['moving'],str):
+            raise ValueError('Invalid project file: anchor and moving paths must be strings.')
+        fingerprints=data.get('fingerprints',{})
+        if not isinstance(fingerprints,dict):
+            raise ValueError('Invalid project file: fingerprints must be a mapping.')
+        project=cls(anchor=data['anchor'],moving=data['moving'],matrix=rigid_matrix(data['matrix']),fingerprints=fingerprints)
         project.verify_sources()
         # QA and approval are always recomputed from actual geometry on restore.
         return project

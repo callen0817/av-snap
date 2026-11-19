@@ -1,6 +1,15 @@
 """Offline launcher: dependency installation belongs to setup, never startup."""
 import os
 import sys
+import tempfile
+
+
+def _is_headless():
+    return (
+        os.environ.get('AV_SNAP_HEADLESS') == '1'
+        or os.environ.get('QT_QPA_PLATFORM', '').lower() == 'offscreen'
+        or '--smoke-test' in sys.argv
+    )
 
 
 def main():
@@ -12,7 +21,7 @@ def main():
         run(sys.argv[2:]); return 0
     try:
         from PyQt5.QtCore import Qt,QTimer
-        from PyQt5.QtWidgets import QApplication,QMessageBox
+        from PyQt5.QtWidgets import QApplication
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling,True)
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,True)
         app=QApplication(sys.argv)
@@ -28,7 +37,8 @@ def main():
                     assert window.windowTitle().startswith('AV Snap')
                     assert not window.btn_export.isEnabled()
                     assert not window.btn_approve.isEnabled()
-                    window.grab().save(os.environ.get('AV_SNAP_SCREENSHOT','/tmp/av-snap-smoke.png'))
+                    default_shot = os.path.join(tempfile.gettempdir(), 'av-snap-smoke.png')
+                    window.grab().save(os.environ.get('AV_SNAP_SCREENSHOT', default_shot))
                     print('PASS packaged/startup GUI smoke',flush=True)
                     app.exit(0)
                 except Exception:
@@ -40,12 +50,15 @@ def main():
         import traceback
         traceback.print_exc()
         message=f'AV Snap could not start: {error}\nInstall requirements.txt in your virtual environment, then retry. No packages are installed during launch.'
-        try:
-            from PyQt5.QtWidgets import QApplication,QMessageBox
-            app=QApplication.instance() or QApplication(sys.argv)
-            QMessageBox.critical(None,'AV Snap startup error',message)
-        except Exception:
+        if _is_headless():
             print(message,file=sys.stderr)
+        else:
+            try:
+                from PyQt5.QtWidgets import QApplication,QMessageBox
+                app=QApplication.instance() or QApplication(sys.argv)
+                QMessageBox.critical(None,'AV Snap startup error',message)
+            except Exception:
+                print(message,file=sys.stderr)
         return 1
 
 if __name__=='__main__':
